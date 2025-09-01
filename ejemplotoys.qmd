@@ -1,0 +1,142 @@
+---
+title: "toys ejemplo"
+format: html
+editor: visual
+---
+
+## Quarto
+```{r}
+library(readr)
+library(tidyverse)
+```
+
+```{r}
+data=read_csv("~/projectR/toy_bayes.csv")
+head(data)
+```
+X1 y X2 son continuas
+X3 CATEGÓRICA CON 3 CATEGORÍAS
+Y tiene dos categorías: Class 0 y Class 1
+```{r}
+data |>
+    filter(y == "Class0") |>
+    ggplot(aes(x = x1, y = after_stat(density))) +
+    geom_histogram(color = "dodgerblue", fill = "slategray1", alpha = 0.4) +
+    geom_density(fill = "dodgerblue", color = NA, lwd = 1, alpha = 0.5) +
+    labs(x = expression(x[1]), y = "Density", title = expression(x[1] ~ "|" ~ y == 0)) +
+    theme_bw() +
+    theme(plot.title = element_text(hjust = 0.5, face = "bold",
+                                    margin = margin(0, 0, 5, 0)),
+            axis.title.x = element_text(face = "bold"),
+            axis.title.y = element_text(face = "bold", angle = 90),
+            legend.title = element_text(hjust = 0.5, face = "bold"),
+            legend.text = element_text(hjust = 0.5),
+            strip.text = element_text(size = 14, hjust = 0.5, face = "bold",
+                                      margin = margin(2, 3, 3, 3)))
+```
+La curva sombreada el el kernel plot, distribución de $X_1$ dado que y=0
+ Se puede hacer lo mismo para $X_2$ y y=1
+ 
+ ¿Cómo estimar la densidad de $X_1$ y $X_2$?
+ f(x1|y) y f(x2|y)?
+con un estimador de tipo kernel
+
+ Se hace de forma no parámetrica, se usa un estimador de tipo kernel (la curva anterior es $\hat{y}$ (x1|y=0))
+ 
+Para estimar la funci¿ón de X para X3 se cuentan las observaciones de cada clase
+ 
+```{r}
+data |>
+    filter(y == "Class0") |> #se realiza un filtro por la var  de respuesta, se quiere que sea igual a la primera clase
+    group_by(x3) |> # se agrupa por los diferentes valores de x3
+    summarise(n = n()) |> #comienza a hacer conteos para las 3 categorías
+    mutate(prob = n/sum(n)) #se crea una nueva variable o se modifica una existente, en este caso ésta calcula las probabilidades
+```
+Debería sumar 1
+
+Se puede hacer exactamente lo mismo pero con filtro Y y sus categorías
+prior: probabilidad de que y tome alguno de los calores $P(y=k)$
+
+```{r}
+prior = data |>
+            group_by (y)|>                        ## Agrupamos por la etiqueta
+            summarise(n=n()) |>                        ## Contamos el número de observaciones de cada clase
+  #la función n()cuenta cuántas observacionnes hay en los casos
+  mutate(prior_prob = n/sum(n))  ## Calculamos las probabilidades a priori
+
+```
+```{r}
+prior
+```
+Al tener un clasificador, queremos clasificar nuesrasobservaciones entonces ahora $\tilde{x}=(0.4,1.5,level1)$
+
+Ahora estimamos f(x1) y f(x2) de las cuales extraemos las bandwidths
+```{r}
+bws = data |>
+        group_by(y) |>                            ## Agrupamos por la etiqueta en este caso es y, creamos las bandwiths necesarias para cada clase de y
+        summarise(bw1 = density(x1)$bw,
+                  bw2 = density(x2)$bw) ## Extraemos los bandwidths de x1 y x2
+                   
+```
+```{r}
+bws
+```
+```{r}
+x_tilde = tibble(y = c("Class0", "Class1"),
+                 x1 = rep(0.4, 2), x2 = rep(1.5, 2))
+```
+como tenemos 2 clases de y se repite la observación dos veces, en n clases serían n observaciones
+numprobs representa la densidad de las variables numéricas
+ 
+```{r}
+num_probs = x_tilde |>
+                left_join(bws, by = "y")
+```
+```{r}
+num_probs
+```
+las clases son mi k=1 y k=2, por eso conviene que se repita y tengan todas las categorías de y. Ej. primera columna sirve para $\hat{f}(x_1|y=class0) =0.4$
+
+se usa estimador de tipo kernel, en este caso $\hat{f}(\tilde{x}|y) $ lo cual es igual a la kernel function y con eso se estimano los valores del numerador en P(Y=k|X=xtilde)
+¨¨¨¨
+```{r}
+K = function(x){
+    return(exp(-x^2/2)/sqrt(2*pi))
+}
+```
+mando a llamar la función kernel que recién creé y se la aplico a lo que sea que me dan de la función de x
+```{r}
+kernel = function(x, data, bw){
+    return(mean(K((x-data)/bw))/bw)
+}
+```
+```{r}
+num_probs = num_probs |>
+                group_by(y) |>  ## Agrupamos por la etiqueta
+                summarise(kernel1 = kernel(x1,data$x1,bw1),                ## Calculamos los kernels sobre x1 y x2 nueva y se necesitan los datos originales de éstos
+                           kernel2 = kernel(x2,data$x2,bw2)) |>
+                select(y, kernel1, kernel2)  ## Seleccionamos sólo la etiqueta y los kernels
+```
+```{r}
+num_probs
+```
+ejemplo columna 1 es $\tilde{f}(x_1|y)$ y dependiendo sus clases
+```{r}
+cat_probs = data |>
+                group_by(y,x3) |>        ## Realizamos la agrupación por la etiqueta y x3
+                summarise(n = n()) |>    ## Contamos el número de observaciones
+                group_by(y) |>        ## Agrupamos por la etiqueta
+                mutate(prob = n/sum(n)) |> ## Calculamos las probabilidades
+                filter(x3=="Level1")           ## Seleccionamos sólo el caso cuando x3 = Level1
+```
+```{r}
+cat_probs
+```
+```{r}
+total = sum(prior$prior_prob * num_probs$kernel1 * num_probs$kernel2 * cat_probs$prob)
+```
+
+```{r}
+(prior$prior_prob * num_probs$kernel1 * num_probs$kernel2 * cat_probs$prob)/total
+```
+La nueva observación se asigna a class 1, la de 0.94
